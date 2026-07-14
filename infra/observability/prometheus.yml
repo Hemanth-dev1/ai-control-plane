@@ -1,0 +1,42 @@
+# =============================================================================
+# Prometheus Configuration — Enterprise AI Control Plane
+# =============================================================================
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: "control-plane"
+    static_configs:
+      - targets: ["control-plane:8000"]
+    metrics_path: /metrics
+
+  - job_name: "agent-runtime"
+    static_configs:
+      - targets: ["agent-runtime:8001"]
+    metrics_path: /metrics
+
+  - job_name: "tool-gateway"
+    static_configs:
+      - targets: ["tool-gateway:8002"]
+    metrics_path: /metrics
+
+  - job_name: "crm-service"
+    static_configs:
+      - targets: ["crm-service:8003"]
+    metrics_path: /metrics
+
+  - job_name: "ticketing-service"
+    static_configs:
+      - targets: ["ticketing-service:8004"]
+    metrics_path: /metrics
+
+  - job_name: "notification-service"
+    static_configs:
+      - targets: ["notification-service:8005"]
+    metrics_path: /metrics
+
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]

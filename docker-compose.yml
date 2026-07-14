@@ -1,0 +1,290 @@
+version: "3.9"
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  # ============================================================================
+  # Core Infrastructure
+  # ============================================================================
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: controlplane
+      POSTGRES_PASSWORD: controlplane
+      POSTGRES_DB: controlplane
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U controlplane"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    logging: *default-logging
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    logging: *default-logging
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    ports:
+      - "9092:9092"
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging: *default-logging
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    logging: *default-logging
+
+  # ============================================================================
+  # Policy Engine
+  # ============================================================================
+  opa:
+    image: openpolicyagent/opa:latest
+    command:
+      - "run"
+      - "--server"
+      - "--log-level=debug"
+      - "--addr=:8181"
+      - "/policies/policy.rego"
+    volumes:
+      - ./infra/observability/opa:/policies
+    ports:
+      - "8181:8181"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "http://localhost:8181/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    logging: *default-logging
+
+  # ============================================================================
+  # Core Services
+  # ============================================================================
+  control-plane:
+    build:
+      context: .
+      dockerfile: services/control-plane/Dockerfile
+    environment:
+      DATABASE_URL: postgresql+asyncpg://controlplane:controlplane@postgres:5432/controlplane
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET_KEY: ${CONTROL_PLANE_JWT_SECRET_KEY:-change-me-in-production}
+      OPA_URL: http://opa:8181
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      SERVICE_NAME: control-plane
+      LOG_LEVEL: INFO
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      opa:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    logging: *default-logging
+
+  agent-runtime:
+    build:
+      context: .
+      dockerfile: services/agent-runtime/Dockerfile
+    environment:
+      CONTROL_PLANE_URL: http://control-plane:8000
+      TOOL_GATEWAY_URL: http://tool-gateway:8002
+      ANTHROPIC_API_KEY: ${AGENT_RUNTIME_ANTHROPIC_API_KEY:-}
+      LLM_MODEL: ${AGENT_RUNTIME_LLM_MODEL:-claude-sonnet-4-20250514}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      SERVICE_NAME: agent-runtime
+      LOG_LEVEL: INFO
+      AGENT_CLIENT_ID: agent-runtime
+      AGENT_CLIENT_SECRET: change-me-in-production
+    ports:
+      - "8001:8001"
+    depends_on:
+      - control-plane
+      - tool-gateway
+    logging: *default-logging
+
+  tool-gateway:
+    build:
+      context: .
+      dockerfile: services/tool-gateway/Dockerfile
+    environment:
+      CRM_SERVICE_URL: http://crm-service:8003
+      TICKETING_SERVICE_URL: http://ticketing-service:8004
+      NOTIFICATION_SERVICE_URL: http://notification-service:8005
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      SERVICE_NAME: tool-gateway
+      LOG_LEVEL: INFO
+      CONTROL_PLANE_URL: http://control-plane:8000
+    ports:
+      - "8002:8002"
+    depends_on:
+      - crm-service
+      - ticketing-service
+      - notification-service
+    logging: *default-logging
+
+  # ============================================================================
+  # Backend Systems
+  # ============================================================================
+  crm-service:
+    build:
+      context: .
+      dockerfile: backend-systems/crm-service/Dockerfile
+    ports:
+      - "8003:8003"
+    logging: *default-logging
+
+  ticketing-service:
+    build:
+      context: .
+      dockerfile: backend-systems/ticketing-service/Dockerfile
+    ports:
+      - "8004:8004"
+    logging: *default-logging
+
+  notification-service:
+    build:
+      context: .
+      dockerfile: backend-systems/notification-service/Dockerfile
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    ports:
+      - "8005:8005"
+    depends_on:
+      - kafka
+    logging: *default-logging
+
+  # ============================================================================
+  # Observability
+  # ============================================================================
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.96.0
+    volumes:
+      - ./infra/observability/otel-collector-config.yaml:/etc/otel-collector-config.yaml
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    ports:
+      - "4317:4317"  # OTLP gRPC
+      - "4318:4318"  # OTLP HTTP
+    logging: *default-logging
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.55
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"  # UI
+    logging: *default-logging
+
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    volumes:
+      - ./infra/observability/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    ports:
+      - "9090:9090"
+    logging: *default-logging
+
+  grafana:
+    image: grafana/grafana:10.2.3
+    volumes:
+      - ./infra/observability/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./infra/observability/grafana/datasources:/etc/grafana/provisioning/datasources
+      - grafana_data:/var/lib/grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_INSTALL_PLUGINS: ""
+    ports:
+      - "3000:3000"
+    logging: *default-logging
+
+  opensearch:
+    image: opensearchproject/opensearch:2.12.0
+    environment:
+      discovery.type: single-node
+      plugins.security.disabled: "true"
+      OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"  # REST API
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
+    logging: *default-logging
+
+  opensearch-dashboards:
+    image: opensearchproject/opensearch-dashboards:2.12.0
+    environment:
+      OPENSEARCH_HOSTS: '["http://opensearch:9200"]'
+      DISABLE_SECURITY_DASHBOARDS_PLUGIN: "true"
+    ports:
+      - "5601:5601"
+    depends_on:
+      - opensearch
+    logging: *default-logging
+
+  # ============================================================================
+  # Kafka Topic Init & Audit Consumer
+  # ============================================================================
+  kafka-init:
+    image: confluentinc/cp-kafka:7.6.0
+    depends_on:
+      - kafka
+    entrypoint: ["/bin/bash", "-c"]
+    command: |
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic policy.decisions --partitions 3 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic agent.executions --partitions 3 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic tool.invocations --partitions 3 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic notifications.outbound --partitions 3 --replication-factor 1
+      echo "Topics created successfully"
+    logging: *default-logging
+
+# ============================================================================
+# Volumes
+# ============================================================================
+volumes:
+  postgres_data:
+  prometheus_data:
+  grafana_data:
+  opensearch_data:

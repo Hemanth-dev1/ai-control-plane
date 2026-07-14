@@ -1,0 +1,24 @@
+# =============================================================================
+# Grafana Datasources — Enterprise AI Control Plane
+# =============================================================================
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+
+  - name: OpenSearch
+    type: opensearch
+    access: proxy
+    url: http://opensearch:9200
+    isDefault: false
+    editable: false
+    jsonData:
+      database: control-plane-*
+      timeField: "@timestamp"
+      flavor: opensearch
