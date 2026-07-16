@@ -155,7 +155,7 @@ def get_mcp_app():
             audit_producer=audit_producer,
             available_tools=AVAILABLE_TOOLS,
         )
-        mcp_server = fastmcp.app
+        mcp_server = fastmcp.sse_app
     return mcp_server
 
 

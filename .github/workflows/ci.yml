@@ -26,9 +26,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install ruff mypy
           pip install -e libs/shared_schemas/
-          pip install -r services/control-plane/requirements.txt
-          pip install -r services/agent-runtime/requirements.txt
-          pip install -r services/tool-gateway/requirements.txt
+          pip install -r services/control-plane/requirements.txt -r services/control-plane/requirements-dev.txt
+          pip install -r services/tool-gateway/requirements.txt -r services/tool-gateway/requirements-dev.txt
+          pip install -r services/agent-runtime/requirements.txt -r services/agent-runtime/requirements-dev.txt
 
       - name: Lint with Ruff
         run: |
@@ -53,7 +53,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e libs/shared_schemas/
-          pip install pytest pytest-asyncio
+          pip install -r libs/shared_schemas/requirements-dev.txt
 
       - name: Run tests
         run: |
@@ -88,8 +88,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e libs/shared_schemas/
-          pip install -r services/control-plane/requirements.txt
-          pip install pytest pytest-asyncio httpx
+          pip install -r services/control-plane/requirements.txt -r services/control-plane/requirements-dev.txt
 
       - name: Run tests
         run: |
@@ -97,20 +96,91 @@ jobs:
         env:
           DATABASE_URL: postgresql+asyncpg://controlplane:controlplane@localhost:5432/controlplane
 
+  test-tool-gateway:
+    name: Test Tool Gateway
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e libs/shared_schemas/
+          pip install -r services/tool-gateway/requirements.txt -r services/tool-gateway/requirements-dev.txt
+
+      - name: Run tests
+        run: |
+          cd services/tool-gateway && python -m pytest -v
+
+  test-agent-runtime:
+    name: Test Agent Runtime
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e libs/shared_schemas/
+          pip install -r services/agent-runtime/requirements.txt -r services/agent-runtime/requirements-dev.txt
+          pip install ruff mypy
+
+      - name: Verify app imports cleanly
+        run: |
+          cd services/agent-runtime && \
+          PYTHONPATH=../../libs/shared_schemas:$PYTHONPATH \
+          python -c "
+from app.config import settings
+from app.llm_client import LLMClient
+from app.control_plane_client import ControlPlaneClient
+from app.mcp_client import MCPClient
+from app.loop import AgentLoop
+print('All agent-runtime imports OK')
+"
+
+      - name: Lint with Ruff
+        run: |
+          ruff check services/agent-runtime/
+
+      - name: Type check with mypy
+        run: |
+          mypy services/agent-runtime/ --ignore-missing-imports || true
+
   build-docker:
     name: Build Docker Images
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    needs: [lint-and-typecheck, test-shared, test-control-plane]
+    needs:
+      - lint-and-typecheck
+      - test-shared
+      - test-control-plane
+      - test-tool-gateway
+      - test-agent-runtime
     strategy:
       matrix:
-        service:
-          - control-plane
-          - agent-runtime
-          - tool-gateway
-          - crm-service
-          - ticketing-service
-          - notification-service
+        include:
+          - service: control-plane
+            dockerfile: services/control-plane/Dockerfile
+          - service: agent-runtime
+            dockerfile: services/agent-runtime/Dockerfile
+          - service: tool-gateway
+            dockerfile: services/tool-gateway/Dockerfile
+          - service: crm-service
+            dockerfile: backend-systems/crm-service/Dockerfile
+          - service: ticketing-service
+            dockerfile: backend-systems/ticketing-service/Dockerfile
+          - service: notification-service
+            dockerfile: backend-systems/notification-service/Dockerfile
     steps:
       - uses: actions/checkout@v4
 
@@ -125,7 +195,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: services/${{ matrix.service }}/Dockerfile
+          file: ${{ matrix.dockerfile }}
           push: true
           tags: |
             ghcr.io/${{ github.repository }}/${{ matrix.service }}:${{ github.sha }}

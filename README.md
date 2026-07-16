@@ -155,7 +155,7 @@ cp .env.example .env
 docker compose up -d
 ```
 
-This starts **17 containers** — Postgres, Redis, Kafka + Zookeeper, OPA, the 3 core services, 3 backend systems, OTel Collector, Jaeger, Prometheus, Grafana, OpenSearch + Dashboards, and a Kafka topic initializer.
+This starts **18 containers** — Postgres, Redis, Kafka + Zookeeper, OPA, the 3 core services, 3 backend systems, OTel Collector, Jaeger, Prometheus, Grafana, OpenSearch + Dashboards, a Kafka topic initializer, and the audit consumer.
 
 ### Verify Everything is Running
 
@@ -275,7 +275,7 @@ Single mediation point for all tool calls — implements both MCP protocol and R
 | **MCP Server** | `FastMCP` framework, tools registered with `@mcp.tool(name=...)`. SSE endpoint at `/mcp/sse`. |
 | **REST API** | `GET /tools` (list schemas), `POST /execute` (call a tool) — kept for internal service-to-service calls and backward compatibility. |
 | **Schema Validation** | Every invocation validated against JSON Schema (jsonschema) before reaching backends. |
-| **Audit Logging** | Kafka producer emitting to `tool.invocations` topic. Each event includes tool name, arguments, agent ID, success/failure, duration, and correlation ID. |
+| **Audit Logging** | Kafka producer emitting to `tool.invocations` topic. Each event includes tool name, arguments, agent ID, success/failure, duration, and correlation ID. A standalone `audit-consumer` service reads `tool.invocations` and `notifications.outbound` topics from Kafka and writes a flattened JSON audit trail to stdout. |
 | **Tools Exposed** | `crm.lookup_customer`, `crm.add_note`, `ticketing.create_ticket`, `ticketing.get_ticket`, `notify.send_message` |
 | **Backend Clients** | CRM, Ticketing, Notification — each with tenacity retries (2 attempts, exponential backoff) and 5-second timeouts. |
 
@@ -319,10 +319,12 @@ Single mediation point for all tool calls — implements both MCP protocol and R
 
 Kafka was chosen for **durability, replayability, and multiple consumer groups**:
 - **Durability:** Events persist to disk and survive consumer crashes. With RabbitMQ, once consumed, the message is gone (unless explicitly acknowledged with retry logic). Kafka's log-based storage means we can replay a week of audit events for compliance.
-- **Multiple consumers:** The same `policy.decisions` topic is consumed by the audit consumer (for OpenSearch), a potential compliance dashboard, and a security monitoring pipeline. Kafka handles this natively with consumer groups; RabbitMQ would need exchange-to-exchange bindings or a fanout pattern.
+- **Multiple consumers:** Kafka handles this natively with consumer groups; RabbitMQ would need exchange-to-exchange bindings or a fanout pattern.
 - **Ordering:** Kafka preserves message order within a partition. For audit trails, knowing that "policy check happened BEFORE tool execution" is critical.
 
 **The trade-off:** Kafka is heavy for a demo — Zookeeper + broker use ~1 GB RAM. For a simpler setup, Redis Streams or Redpanda (Kafka-compatible, single binary) would be lighter. The `docker-compose.yml` includes a `kafka-init` service that creates the 4 topics automatically.
+
+> **Current audit coverage:** The Kafka topics `tool.invocations` (published by the tool gateway) and `notifications.outbound` (published by the notification service) are live today. The `policy.decisions` and `agent.executions` topics are created but not yet published — this is the next iteration of the audit pipeline.
 
 ### Why MCP vs Custom REST Protocol?
 
@@ -377,7 +379,7 @@ Every inter-service operation is I/O-bound: HTTP calls to backends, database que
 
 ```
 ai-control-plane/
-├── docker-compose.yml              # 17 services, one command
+├── docker-compose.yml              # 18 services, one command
 ├── Makefile                        # up, down, test, lint, typecheck
 ├── .env.example                    # All required environment variables
 ├── README.md                       # This file
@@ -432,7 +434,9 @@ ai-control-plane/
 │   └── notification-service/       # Kafka-based notifications
 │
 ├── services/audit-consumer/         # 📋 Kafka → audit trail
-│   └── main.py                     # Reads 4 topics, writes JSON to stdout
+│   ├── Dockerfile
+│   ├── requirements.txt
+│   └── main.py                     # Reads tool.invocations + notifications.outbound, writes JSON to stdout
 │
 ├── infra/
 │   ├── terraform/                  # ☁️ AWS IaC (plan, not applied)
@@ -476,4 +480,9 @@ GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every PR and merge 
 | **Type Check** | `mypy` on shared schemas and control plane |
 | **Test: Shared Schemas** | `pytest` for model validation |
 | **Test: Control Plane** | `pytest` with Postgres service container |
+| **Test: Tool Gateway** | `pytest` for schema validation, audit events, end-to-end flow |
 | **Build & Push** | On `main` merge: build 6 Docker images → GitHub Container Registry, tagged with `git SHA` + `latest` |
+
+## LangGraph (Resona) Integration
+
+See [`docs/resona-integration.md`](docs/resona-integration.md) for a detailed guide on connecting a LangGraph agent to this control plane through the governed tool gateway, including the three-node flow: `auth_node → policy_node → tool_node`.

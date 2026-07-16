@@ -280,6 +280,18 @@ services:
       echo "Topics created successfully"
     logging: *default-logging
 
+  audit-consumer:
+    build:
+      context: .
+      dockerfile: services/audit-consumer/Dockerfile
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    depends_on:
+      - kafka
+      - kafka-init
+    restart: unless-stopped
+    logging: *default-logging
+
 # ============================================================================
 # Volumes
 # ============================================================================

@@ -1,0 +1,11 @@
+# Test dependencies for control-plane
+# Install alongside requirements.txt:
+#   pip install -r requirements.txt -r requirements-dev.txt
+#
+# Test imports used:
+#   pytest          — test runner, pytest.raises, pytest.mark.asyncio
+#   pytest-asyncio  — async test support (asyncio_mode = auto in pytest.ini)
+#   respx           — HTTP mock for OPA policy engine tests
+pytest>=7.0
+pytest-asyncio>=0.21
+respx>=0.20,<1.0

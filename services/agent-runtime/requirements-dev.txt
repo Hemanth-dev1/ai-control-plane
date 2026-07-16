@@ -1,0 +1,10 @@
+# Test dependencies for agent-runtime
+#
+# NOTE: agent-runtime has no test suite yet (no tests/ directory).
+# Install test deps alongside requirements.txt when tests are written:
+#   pip install -r requirements.txt -r requirements-dev.txt
+#
+# Expected test deps (when tests are written):
+#   pytest>=7.0
+#   pytest-asyncio>=0.21
+#   respx>=0.20,<1.0

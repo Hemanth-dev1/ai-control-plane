@@ -1,0 +1,6 @@
+# Test dependencies for shared_schemas
+# Install alongside requirements.txt (or pyproject.toml):
+#   pip install -r requirements-dev.txt
+#
+# These tests only use pytest + stdlib (no respx, no pytest-asyncio needed — tests are all sync).
+pytest>=7.0
