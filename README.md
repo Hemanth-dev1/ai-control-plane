@@ -481,6 +481,7 @@ GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every PR and merge 
 | **Test: Shared Schemas** | `pytest` for model validation |
 | **Test: Control Plane** | `pytest` with Postgres service container |
 | **Test: Tool Gateway** | `pytest` for schema validation, audit events, end-to-end flow |
+| **Test: Agent Runtime** | Import verification (no tests yet) + `ruff` lint + `mypy` type check |
 | **Build & Push** | On `main` merge: build 6 Docker images → GitHub Container Registry, tagged with `git SHA` + `latest` |
 
 ## LangGraph (Resona) Integration

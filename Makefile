@@ -60,7 +60,7 @@ setup:
 
 # ── Testing ─────────────────────────────────────────────────────────────────
 
-test: test-shared test-control-plane
+test: test-shared test-control-plane test-tool-gateway
 
 test-shared:
 	cd libs/shared_schemas && python -m pytest -v
